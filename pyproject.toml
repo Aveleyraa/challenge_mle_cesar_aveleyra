@@ -84,5 +84,6 @@ addopts = "-q --cov=challenge --cov-report=term-missing"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "jupytext>=1.19.1",
 ]
