@@ -81,3 +81,8 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --cov=challenge --cov-report=term-missing"
+
+[dependency-groups]
+dev = [
+    "jupytext>=1.19.1",
+]

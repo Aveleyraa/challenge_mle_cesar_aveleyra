@@ -42,3 +42,10 @@ F1 clase 1: 0.37
 Recall clase 1: 0.69
 
 practiacamente son lo mismos y desbalanceados no mejora nada así que tomando esto en consideración usaría el XGBoost ya que tiene ventajas como poder ajustar más hiperparámetros  a la hora de querer mejorarlo y en terminos generales es más robusto.
+
+
+## Creación de clases para el archivo model.py
+
+Se generó un archivo .py del notebook a partir de pytext esto como practica para eficientar la escritura de código. 
+A partir de ahi se usaron las clases que ya venían en la plantilla: preprocess, fit y predict con lo que se tenía en el notebook. Además se generaron
+funciones de ayuda para el preprocesado como la función _generate_target para generar la variable objetivo; la función _get_min_diff para calcular la diferencia en minutos y además se agregó la función predict_proba para obetner el valor de la probabilidad del restrazo, esto para tener una mejor lectura del código y fuera más estrcuturado. 
