@@ -1,0 +1,22 @@
+[
+    {
+        "ParameterKey": "CompanyName",
+        "ParameterValue": "latam"
+    },
+    {
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "challenge"
+    },
+    {
+        "ParameterKey": "Environment",
+        "ParameterValue": "dev"
+    },
+    {
+        "ParameterKey": "Region",
+        "ParameterValue": "us-east-2"
+    },
+    {
+        "ParameterKey": "RawBucket",
+        "ParameterValue": "latam-challenge-dev-raw-data"
+    }
+]

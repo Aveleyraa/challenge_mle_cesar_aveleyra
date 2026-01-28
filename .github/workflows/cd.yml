@@ -12,78 +12,80 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop'
+
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # 🔑 OIDC
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: us-east-2
+      STACK_NAME: challenge-infra
+      ENV: dev   # o prod, staging, etc
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - name: Upgrade pip
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-      
-      # Install project using pyproject.toml
-      - name: Install project dependencies
-        run: |
-          pip install .[dev]
-      
-      # ============================================
-      # AWS AUTHENTICATION
-      # ============================================
-      - name: Configure AWS credentials
+
+      # ===============================
+      # AWS OIDC AUTH (equiv CI_JOB_JWT)
+      # ===============================
+      - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-      
-      # ============================================
-      # AWS SAM
-      # ============================================
-      - name: Set up SAM CLI
-        uses: aws-actions/setup-sam@v2
-      
-      - name: Build SAM application
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/Gitlab-AssumeRoleWithAction
+          aws-region: us-east-2
+
+      - name: Verify identity
         run: |
-          sam build
-      
-      - name: Deploy to AWS Lambda
+          aws sts get-caller-identity
+
+      # ===============================
+      # Load CloudFormation parameters
+      # ===============================
+      - name: Generate parameters from JSON
+        id: params
         run: |
-          sam deploy \
-            --no-confirm-changeset \
+          echo "🧪 Generating parameters"
+          PARAMS=$(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' infra/parameters_${ENV}.json | paste -sd " ")
+          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
+
+      # ===============================
+      # Validate token
+      # ===============================
+      - name: Validate GitHub token
+        run: |
+          if [[ -z "${{ secrets.GIT_PIPELINE_TRIGGER_TOKEN }}" ]]; then
+            echo "❌ ERROR: GIT_PIPELINE_TRIGGER_TOKEN missing"
+            exit 1
+          else
+            echo "✅ Token present"
+          fi
+
+      # ===============================
+      # Add GitHub context
+      # ===============================
+      - name: Add GitHub parameters
+        run: |
+          PARAMS="$PARAMS GitHubToken=${{ secrets.GIT_PIPELINE_TRIGGER_TOKEN }}"
+          PARAMS="$PARAMS GitHubRepo=${{ github.repository }}"
+          PARAMS="$PARAMS GitHubBranch=develop"
+          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
+
+      - name: Show final parameters
+        run: |
+          echo "$PARAMS" | tr ' ' '\n'
+
+      # ===============================
+      # Deploy CloudFormation
+      # ===============================
+      - name: Deploy infrastructure
+        run: |
+          set -e
+          echo "🚀 Deploying CloudFormation stack"
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name $STACK_NAME \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides $PARAMS \
             --no-fail-on-empty-changeset
-      
-      # ============================================
-      # POST-DEPLOY VERIFICATION
-      # ============================================
-      - name: Wait for deployment
-        run: sleep 30
-      
-      - name: Health check
-        run: |
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.AWS_API_URL }}/health)
-          if [ "$RESPONSE" -eq 200 ]; then
-            echo "✅ Deployment successful! API is healthy."
-          else
-            echo "❌ Deployment failed! Health check returned $RESPONSE"
-            exit 1
-          fi
-      
-      - name: Smoke test
-        run: |
-          RESPONSE=$(curl -s -X POST "${{ secrets.AWS_API_URL }}/predict" \
-            -H "Content-Type: application/json" \
-            -d '{"flights":[{"OPERA":"Grupo LATAM","TIPOVUELO":"N","MES":3}]}')
-          echo "Response: $RESPONSE"
-          if echo "$RESPONSE" | grep -qi "predict"; then
-            echo "✅ Smoke test passed!"
-          else
-            echo "❌ Smoke test failed"
-            exit 1
-          fi
