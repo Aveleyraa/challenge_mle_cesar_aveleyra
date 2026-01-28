@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MLOps API - FastAPI + Lambda + API Gateway + S3
+
+Parameters:
+  CompanyName:
+    Type: String
+    Default: latam
+
+  ProjectName:
+    Type: String
+    Default: ml-api
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, prod]
+
+  RawBucket:
+    Type: String
+    Description: S3 bucket name raw zone
+
+
+Resources:
+
+  # ===============================
+  # IAM Role for Lambda
+  # ===============================
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${CompanyName}-${ProjectName}-${Environment}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${RawBucket}"
+                  - !Sub "arn:aws:s3:::${RawBucket}/*"
+
+  # ===============================
+  # S3 Buckets
+  # ===============================
+  RawDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref RawBucket
+
+
+  # ===============================
+  # Lambda (FastAPI)
+  # ===============================
+  MLApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${CompanyName}-${ProjectName}-${Environment}-api"
+      Runtime: python3.11
+      Handler: app.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 1024
+      Code:
+        S3Bucket: !Ref ModelBucket
+        S3Key: api-package.zip
+      Environment:
+        Variables:
+          ENV: !Ref Environment
+          RAW_BUCKET: !Ref RawBucket
+          STAGING_BUCKET: !Ref StagingBucket
+          MODEL_BUCKET: !Ref ModelBucket
+
+  # ===============================
+  # API Gateway
+  # ===============================
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${CompanyName}-${ProjectName}-${Environment}-api"
+
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "{proxy+}"
+      RestApiId: !Ref ApiGateway
+
+  ApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+          - LambdaArn: !GetAtt MLApiFunction.Arn
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MLApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Environment
+
+Outputs:
+  ApiUrl:
+    Description: Public API endpoint
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/"
+
+  RawBucket:
+    Value: !Ref RawDataBucket

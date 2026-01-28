@@ -1,86 +1,503 @@
-## Documentacion de lo realizado en el proyecto
+# Documentation Flight Delay Prediction API
 
-primero se realiza la creación de un ambiente virtual para trabajar con las dependencias necesarias, se utiliza uv para la creación de esto 
+## Disclaimer
 
-uv vevn mlops-env
+Due to time constraints, the API was not fully deployed to the cloud.  
+However, the complete deployment process is fully documented in this repository, including the infrastructure design, CI/CD pipelines, and the steps required to deploy the API on AWS.
 
+
+
+## Project Overview
+
+### Objective
+Develop a flight delay prediction API using Machine Learning, deployed to the cloud with automated CI/CD.
+
+### Technology Stack
+- **ML**: XGBoost, Scikit-learn
+- **API**: FastAPI, Uvicorn
+- **Cloud**: AWS *
+- **CI/CD**: GitHub Actions
+- **Language**: Python 3.11
+
+### Main Features
+Delay prediction with balanced XGBoost   
+Automatic cloud deployment  
+Automated testing (CI)  
+Continuous deployment (CD)  
+
+---
+
+## IMPORTANT
+
+### `pyproject.toml` instead of `requirements.txt`
+
+In this project, I decided to use **`pyproject.toml` instead of a traditional `requirements.txt`** in order to follow modern Python packaging and MLOps best practices.
+
+The workflow starts by creating an isolated virtual environment to manage dependencies in a clean and reproducible way. For this, I used **`uv`** as the environment and dependency manager:
+
+```bash
+uv venv mlops-env
 source mlops-env/bin/activate
+```
+Once the virtual environment is activated, the project dependencies are defined inside a pyproject.toml file. This allows all dependencies to be structured and centralized in a single configuration file, including:
 
-ya que se teiene activado el ambiente virtual se genera un archivo pyproject.toml para tener las dependencias estrucutradas en un solo archivo.
+Core dependencies ([project.dependencies])
 
-se instala con el comando: uv pip install -e ".[dev]"
+Development dependencies ([project.optional-dependencies.dev])
+
+Tooling configuration (formatters, linters, test frameworks)
+
+Dependencies are installed using:
+
+```bash
+uv pip install -e ".[dev]"
+```
+## Project Structure
+
+```
+.
+├── challenge
+│   ├── api.py
+│   ├── exploration.ipynb
+│   ├── exploration.py
+│   ├── __init__.py
+│   ├── model.py
+├── data
+│   └── data.csv
+├── Dockerfile
+├── docs
+│   └── challenge.md
+├── infra
+│   ├── cloudformation.yml
+│   ├── parameters_dev.json
+│   └── parameters_prod.json
+├── __MACOSX
+│   ├── challenge
+│   ├── docs
+│   ├── tests
+│   │   ├── api
+│   │   ├── model
+│   │   └── stress
+│   └── workflows
+├── Makefile
+├── pyproject.toml
+├── README.md
+├── reports
+│   ├── html
+│   └── junit.xml
+├── requirements-dev.txt
+├── requirements-test.txt
+├── requirements.txt
+├── tests
+│   ├── api
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   └── test_api.py
+│   ├── __init__.py
+│   ├── model
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   └── test_model.py
+│   ├── __pycache__
+│   └── stress
+│       ├── api_stress.py
+│       └── __init__.py
+├── uv.lock
+└── workflows
+    ├── cd.yml
+    └── ci.yml
+```
 
 
-## MODEL
+## Part I: Machine Learning Model
 
-Analizando los modelos que se tienen dentro de exploration.ipynb 
+### 1.1 Problem Analysis
 
-Primer modelo entrenado con XGBoost tiene un problema y es que está detectando todo como clase 0 
+**Context:**
+- Flight dataset with operational features
+- Target: `delay` (1 if delay > 15 min, 0 otherwise)
+- **Class imbalance**: ~81% class 0, ~19% class 1
 
-INSERTAR IMAGEN
+**Initial Metrics:**
 
-Logra el 81% de accuracy porque la clase 0 es del 81% por lo tanto no detecta nada de clase 1
+**XGBoost without balancing:**
+```
+              precision    recall  f1-score   support
+           0       0.81      1.00      0.90     18294
+           1       0.00      0.00      0.00      4214
+```
+Problem: Predicts everything as class 0
+
+**Logistic Regression without balancing:**
+```
+              precision    recall  f1-score   support
+           0       0.82      0.99      0.90     18294
+           1       0.56      0.03      0.06      4214
+```
+Problem: Very low recall for class 1
+
+### 1.2 Implemented Solution
+
+Now, for models using the top 10 features of importance and that are balanced, the following results are obtained:
+
+**Top 10 Features:**
+1. OPERA_Latin American Wings
+2. MES_7 (July)
+3. MES_10 (October)
+4. OPERA_Grupo LATAM
+5. MES_12 (December)
+6. TIPOVUELO_I (International)
+7. MES_4 (April)
+8. MES_11 (November)
+9. OPERA_Sky Airline
+10. OPERA_Copa Air
+
+Logistic Regression balancing:
+
+```
+Matrix: [[9487, 8807], [1314, 2900]]
+              precision    recall  f1-score   support
+
+           0       0.88      0.52      0.65     18294
+           1       0.25      0.69      0.36      4214
 
 
-Primer modelo con regresión logistica
+```
 
-Ligeramente es mejor porque si detecta al manos unos casos de clase 1, pero sigue siendo muy conservador el numero de predicciones.
+XGBoost balancing:
+```
+Matrix: [[9556, 8738], [1313, 2901]]
+              precision    recall  f1-score   support
+
+           0       0.88      0.52      0.66     18294
+           1       0.25      0.69      0.37      4214
+
+```
+
+They are practically the same, and being unbalanced, they don't improve anything. Therefore, taking this into consideration, I would use XGBoost since it has advantages such as being able to adjust more hyperparameters when trying to improve it, and in general, it is more robust.
+
+**Final Model: XGBoost with class balancing**
+
+### Class creation for the model.py file
+
+A standalone .py file was generated from the original notebook using pytext, as a best practice to improve code maintainability and facilitate the transition from experimentation to production-ready code.
+
+Based on this file, the core methods provided by the template were implemented: preprocess, fit, and predict, reusing the logic developed during the exploratory phase in the notebook.
+
+In addition, several helper functions were created to support the preprocessing pipeline, including:
+
+- _generate_target: to compute the target variable.
+
+- _get_min_diff: to calculate time differences in minutes.
+
+- predict_proba: to return the probability of flight delay instead of only the binary prediction.
 
 
-Ahroa para los modelos que usan el top 10 de features importance y están balanceados se obtiene lo siguiente:
 
-Regresión Logística:
-
-Matriz: [[9487, 8807], [1314, 2900]]
-F1 clase 1: 0.36
-Recall clase 1: 0.69
-
-XGBoost:
-
-Matriz: [[9556, 8738], [1313, 2901]]
-F1 clase 1: 0.37
-Recall clase 1: 0.69
-
-practiacamente son lo mismos y desbalanceados no mejora nada así que tomando esto en consideración usaría el XGBoost ya que tiene ventajas como poder ajustar más hiperparámetros  a la hora de querer mejorarlo y en terminos generales es más robusto.
-
-
-## Creación de clases para el archivo model.py
-
-Se generó un archivo .py del notebook a partir de pytext esto como practica para eficientar la escritura de código. 
-A partir de ahi se usaron las clases que ya venían en la plantilla: preprocess, fit y predict con lo que se tenía en el notebook. Además se generaron
-funciones de ayuda para el preprocesado como la función _generate_target para generar la variable objetivo; la función _get_min_diff para calcular la diferencia en minutos y además se agregó la función predict_proba para obetner el valor de la probabilidad del restrazo, esto para tener una mejor lectura del código y fuera más estrcuturado. 
-
-
-## creación de las clases para el archivo api.py
-# 📄 API de Predicción de Retrasos de Vuelos
-
-## Descripción de la implementación
-
-Este proyecto implementa una **API RESTful** utilizando **FastAPI** para exponer un modelo de Machine Learning que predice si un vuelo tendrá retraso. La API funciona como la capa de *serving* del modelo entrenado, permitiendo que aplicaciones externas envíen datos de vuelos y obtengan predicciones en tiempo real.
-
-La solución sigue una arquitectura típica de **MLOps**, separando claramente la validación de datos, la lógica del modelo y la exposición vía HTTP.
 
 ---
 
-## 🧠 Arquitectura general
+## Part II: FastAPI Implementation
 
-La API se organiza en tres capas principales:
+### 2.1 API Structure
 
-1. **Capa de entrada y validación**
-   - Implementada con FastAPI y Pydantic.
-   - Valida que los datos enviados por el cliente cumplan las reglas del modelo.
-
-2. **Capa de lógica de negocio**
-   - Implementada en la clase `DelayModel`.
-   - Contiene el pipeline de preprocesamiento y el modelo entrenado.
-
-3. **Capa de exposición**
-   - Implementada como endpoints REST (`/health` y `/predict`).
-
----
-
-## 🚀 Inicialización del modelo
+**File: `challenge/api.py`**
 
 ```python
-app = fastapi.FastAPI()
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, validator
+
+app = FastAPI()
 model = DelayModel()
+
+
+```
+
+### 2.2 Endpoints
+
+#### GET /health
+**Description:** API health check
+
+**Response:**
+```json
+{
+  "status": "OK"
+}
+```
+
+#### POST /predict
+**Description:** Flight delay prediction
+
+**Request:**
+```json
+{
+  "flights": [
+    {
+      "OPERA": "Grupo LATAM",
+      "TIPOVUELO": "N",
+      "MES": 3
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "predict": [0]
+}
+```
+
+**Validations:**
+- `MES`: 1-12
+- `TIPOVUELO`: 'N' or 'I'
+- `OPERA`: Valid airline
+
+
+
+### 2.3 Error Conversion 422 → 400
+
+**Problem:** FastAPI returns 422 by default, but tests expect 400.
+
+**Solution:** Custom exception handler
+
+```python
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=400,  # ← Convert to 400
+        content={"detail": exc.errors()[0]["msg"]}
+    )
+```
+
+
+
+### 2.4 Run API Locally
+
+```bash
+# With uvicorn
+uvicorn challenge.api:app --reload --host 0.0.0.0 --port 8000
+
+
+# Verify
+curl http://localhost:8000/health
+```
+
+---
+
+## Part III: Cloud Deployment
+
+##  Requirements
+
+- **AWS CLI** configured with permissions for  S3, IAM, CloudFormation, lambda and API gateway
+- **jq** (for JSON parameter handling in infra deploys)
+
+##  3.1 Connect GitHub Actions to AWS using OIDC
+
+1. Create an IAM Identity Provider in your AWS account for GitHub OIDC. [AWS link example](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html)
+
+2. Create an IAM Role in your AWS account with a trust policy that allows GitHub Actions to assume it:
+```bash
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:<GITHUB_ORG>/<GITHUB_REPOSITORY>:ref:refs/heads/<GITHUB_BRANCH>"
+        }
+      }
+    }
+  ]
+}
+```
+3. Attach permissions to the IAM Role that allow it to access the AWS resources you need.
+
+4. Create GitHub Actions workflow (in this repo there are 4 differents fo different purposes):
+
+##  Add GitHub Secrets & Variables
+
+In repository:
+
+**Settings → Secrets and variables → Actions**
+
+### Secrets (sensitive)
+- `AWS_ROLE_TO_ASSUME` → your OIDC role ARN  
+  _Example:_ `arn:aws:iam::123456789012:role/github-oidc-actions`
+
+
+### Variables (non-sensitive defaults; you can override per workflow)
+- `AWS_ACCOUNT_ID` → `123456789012`
+- `AWS_DEFAULT_REGION` → `us-east-2`
+- `COMPANY_NAME` → `latam`
+- `PROJECT_NAME` → `delay-prediction`
+- `ENV` → `dev` _(or `prod`)_
+
+---
+
+
+##  Infrastructure Deployment
+
+
+1. Go to **GitHub → Actions → Infra.yml**.
+2. Click **Run workflow** (top-right).
+3. Choose the input **`env`** (e.g., `dev` or `prod`).
+4. Click **Run workflow** and wait for the job to finish.
+
+**What this workflow does**
+1. Assumes your AWS role via OIDC (using `AWS_ROLE_TO_ASSUME`).
+2. Validates the CloudFormation template (`infra/cloudformation.yml`).
+3. Loads parameters from `infra/parameters_<env>.json`.
+4. Creates/updates the CloudFormation stack `latam-delay-infra-<env>`.
+5. Prints the stack **Outputs** (e.g., bucket names, ARNs) at the end of the job.
+
+```bash
+      - name: Deploy infrastructure
+        run: |
+          set -e
+          echo "🚀 Deploying CloudFormation stack"
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name $STACK_NAME \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides $PARAMS \
+            --no-fail-on-empty-changeset
+```
+
+### AWS Deployment Architecture (S3 + Lambda + API Gateway)
+
+The objective of deploying on AWS was to expose the Machine Learning model as a serverless service, accessible via HTTP, **Unfortunately, I couldn't finish the implementation on AWS, however, I've documented how it should work here**
+
+
+
+The proposed architecture is based on the following services:
+
+```
+Client (curl / frontend / locust)
+        |
+        v
+API Gateway (public endpoint)
+        |
+        v
+AWS Lambda (FastAPI + model)
+        |
+        v
+ML Model loaded in memory
+        |
+        v
+JSON response with prediction
+```
+### Step by Step:
+
+1. **Client sends request**
+   ```bash
+   curl -X POST https://6fnfe0p79e.execute-api.us-east-2.amazonaws.com/dev\
+     -H "Content-Type: application/json" \
+     -d '{"flights": [{"OPERA": "LATAM", "TIPOVUELO": "I", "MES": 7}]}'
+   ```
+
+2. **API Gateway receives and validates**
+   - Verifies headers
+   - Applies rate limiting (if configured)
+   - Handles CORS
+   - Invokes Lambda
+
+3. **Lambda initializes** 
+   - Loads code
+   - Loads model into memory
+   - Optionally downloads from S3
+
+
+4. **FastAPI processes**
+   - Calls DelayModel
+   - Generates prediction
+
+5. **Lambda responds**
+   - Returns to API Gateway
+
+6. **API Gateway responds to client**
+   ```json
+   {
+     "predict": [0]
+   }
+   ```
+
+---
+
+
+
+## Part IV: Continuous Integration (ci.yml)
+
+Este archivo define el pipeline de Integración Continua.
+Su objetivo es validar automáticamente el código cada vez que hay cambios.
+
+### ¿Cuándo se ejecuta?
+
+- En cada push a la rama develop
+
+- En cada Pull Request hacia main o develop
+
+### ¿Qué hace?
+
+1. Descarga el código del repositorio.
+
+2. Configura Python 3.11.
+
+3. Instala las dependencias del proyecto (.[dev]).
+
+4. Ejecuta los tests del modelo.
+
+5. Ejecuta los tests de la API.
+
+6. Genera un reporte de tests y cobertura.
+
+7. Sube los reportes como artefactos del workflow.
+
+Este pipeline asegura que el modelo y la API funcionan correctamente antes de permitir despliegues. Si los tests fallan, el CD no debería ejecutarse.
+
+### 4.1 Continuous Deployment (cd.yml)
+
+Este archivo define el pipeline de Despliegue Continuo.
+Su objetivo es desplegar automáticamente la aplicación en AWS cuando el código ya pasó las validaciones.
+
+### ¿Cuándo se ejecuta?
+
+- Automáticamente cuando termina el workflow de CI y fue exitoso.
+
+- Solo si el commit viene de la rama develop.
+
+- También se puede ejecutar manualmente (workflow_dispatch).
+
+### ¿Qué hace?
+
+1. Descarga el código del repositorio.
+
+2. Se autentica en AWS usando OIDC .
+
+3. Instala las dependencias del proyecto.
+
+4. Empaqueta el código de la API en un archivo lambda.zip.
+
+5. Actualiza el código de la función AWS Lambda.
+
+6. Publica una nueva versión de la Lambda (reinicia el servicio).
+
+Este pipeline se encarga de tomar el código validado por CI y desplegarlo automáticamente como una API en AWS Lambda.
+
+
+
+
+
+
+
+
+

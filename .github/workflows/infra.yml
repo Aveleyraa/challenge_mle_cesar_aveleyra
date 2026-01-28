@@ -1,0 +1,46 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-infra:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_DEFAULT_REGION: us-east-2
+      STACK_NAME: challenge-infra
+      ENV: dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/Gitlab-AssumeRoleWithAction
+          aws-region: us-east-2
+
+      - name: Generate parameters from JSON
+        run: |
+          PARAMS=$(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' infra/parameters_${ENV}.json | paste -sd " ")
+          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
+
+      - name: Add GitHub parameters
+        run: |
+          PARAMS="$PARAMS GitHubToken=${{ secrets.GIT_PIPELINE_TRIGGER_TOKEN }}"
+          PARAMS="$PARAMS GitHubRepo=${{ github.repository }}"
+          PARAMS="$PARAMS GitHubBranch=develop"
+          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name $STACK_NAME \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides $PARAMS
