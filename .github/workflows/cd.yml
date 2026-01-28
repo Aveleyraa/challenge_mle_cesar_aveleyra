@@ -8,84 +8,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-app:
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop'
 
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   # 🔑 OIDC
+      id-token: write
       contents: read
 
     env:
       AWS_DEFAULT_REGION: us-east-2
       STACK_NAME: challenge-infra
-      ENV: dev   # o prod, staging, etc
+      LAMBDA_NAME: challenge-api
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ===============================
-      # AWS OIDC AUTH (equiv CI_JOB_JWT)
-      # ===============================
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/Gitlab-AssumeRoleWithAction
           aws-region: us-east-2
 
-      - name: Verify identity
+      - name: Install dependencies
         run: |
-          aws sts get-caller-identity
+          pip install .[dev]
 
-      # ===============================
-      # Load CloudFormation parameters
-      # ===============================
-      - name: Generate parameters from JSON
-        id: params
+      - name: Package Lambda
         run: |
-          echo "🧪 Generating parameters"
-          PARAMS=$(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' infra/parameters_${ENV}.json | paste -sd " ")
-          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
+          cp -r src/* package/
+          cd package
+          zip -r ../lambda.zip .
 
-      # ===============================
-      # Validate token
-      # ===============================
-      - name: Validate GitHub token
+      - name: Deploy Lambda code
         run: |
-          if [[ -z "${{ secrets.GIT_PIPELINE_TRIGGER_TOKEN }}" ]]; then
-            echo "❌ ERROR: GIT_PIPELINE_TRIGGER_TOKEN missing"
-            exit 1
-          else
-            echo "✅ Token present"
-          fi
+          aws lambda update-function-code \
+            --function-name $LAMBDA_NAME \
+            --zip-file fileb://lambda.zip
 
-      # ===============================
-      # Add GitHub context
-      # ===============================
-      - name: Add GitHub parameters
+      - name: Restart Lambda
         run: |
-          PARAMS="$PARAMS GitHubToken=${{ secrets.GIT_PIPELINE_TRIGGER_TOKEN }}"
-          PARAMS="$PARAMS GitHubRepo=${{ github.repository }}"
-          PARAMS="$PARAMS GitHubBranch=develop"
-          echo "PARAMS=$PARAMS" >> $GITHUB_ENV
-
-      - name: Show final parameters
-        run: |
-          echo "$PARAMS" | tr ' ' '\n'
-
-      # ===============================
-      # Deploy CloudFormation
-      # ===============================
-      - name: Deploy infrastructure
-        run: |
-          set -e
-          echo "🚀 Deploying CloudFormation stack"
-          aws cloudformation deploy \
-            --template-file infra/cloudformation.yml \
-            --stack-name $STACK_NAME \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides $PARAMS \
-            --no-fail-on-empty-changeset
+          aws lambda publish-version \
+            --function-name $LAMBDA_NAME
