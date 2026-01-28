@@ -1,20 +1,18 @@
 name: Continuous Deployment
 
+# Corre SOLO cuando se hace merge a main
+# (después de que el PR fue aprobado y mergeado)
 on:
-  workflow_run:
-    workflows: ["Continuous Integration"]
-    types:
-      - completed
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Permite deploy manual
 
 jobs:
-  deploy:
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'develop'
-
+  # Opcional: Volver a correr tests en main (safety net)
+  test:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -25,17 +23,40 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: Upgrade pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+      
+      - name: Run tests
+        run: |
+          pytest tests/ -v
+
+  # Deploy a producción
+  deploy:
+    needs: test  # Solo deploya si tests pasan
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-      
-      # Install project using pyproject.toml
-      - name: Install project dependencies
-        run: |
           pip install .[dev]
       
       # ============================================
-      # AWS AUTHENTICATION
+      # AWS DEPLOYMENT
       # ============================================
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -44,21 +65,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
       
-      # ============================================
-      # AWS SAM
-      # ============================================
       - name: Set up SAM CLI
         uses: aws-actions/setup-sam@v2
       
       - name: Build SAM application
-        run: |
-          sam build
+        run: sam build
       
-      - name: Deploy to AWS Lambda
+      - name: Deploy to production
+        id: deploy
         run: |
           sam deploy \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
+          
+          # Obtener URL
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name flight-delay-api \
+            --query 'Stacks[0].Outputs[?OutputKey==`FlightDelayApi`].OutputValue' \
+            --output text)
+          echo "url=$URL" >> $GITHUB_OUTPUT
       
       # ============================================
       # POST-DEPLOY VERIFICATION
@@ -68,23 +93,30 @@ jobs:
       
       - name: Health check
         run: |
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.AWS_API_URL }}/health)
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.deploy.outputs.url }}health)
           if [ "$RESPONSE" -eq 200 ]; then
-            echo "✅ Deployment successful! API is healthy."
+            echo "✅ Production deployment successful!"
           else
-            echo "❌ Deployment failed! Health check returned $RESPONSE"
+            echo "❌ Health check failed: $RESPONSE"
             exit 1
           fi
       
       - name: Smoke test
         run: |
-          RESPONSE=$(curl -s -X POST "${{ secrets.AWS_API_URL }}/predict" \
+          RESPONSE=$(curl -s -X POST "${{ steps.deploy.outputs.url }}predict" \
             -H "Content-Type: application/json" \
             -d '{"flights":[{"OPERA":"Grupo LATAM","TIPOVUELO":"N","MES":3}]}')
-          echo "Response: $RESPONSE"
+          
           if echo "$RESPONSE" | grep -qi "predict"; then
             echo "✅ Smoke test passed!"
           else
             echo "❌ Smoke test failed"
             exit 1
           fi
+      
+      - name: Create deployment tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a "v$(date +'%Y%m%d-%H%M%S')" -m "Production deployment"
+          git push origin --tags
