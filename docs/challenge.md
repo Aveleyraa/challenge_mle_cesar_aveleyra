@@ -437,61 +437,50 @@ JSON response with prediction
 
 ## Part IV: Continuous Integration (ci.yml)
 
-Este archivo define el pipeline de Integración Continua.
-Su objetivo es validar automáticamente el código cada vez que hay cambios.
+This file defines the Continuous Integration pipeline.  
+Its main goal is to automatically validate the code every time changes are made.
 
-### ¿Cuándo se ejecuta?
+### When does it run?
 
-- En cada push a la rama develop
+- On every push to the `develop` branch.  
+- On every Pull Request targeting `main` or `develop`.
 
-- En cada Pull Request hacia main o develop
+### What does it do?
 
-### ¿Qué hace?
+1. Checks out the repository code.  
+2. Sets up Python 3.11.  
+3. Installs the project dependencies (`.[dev]`).  
+4. Runs the model tests.  
+5. Runs the API tests.  
+6. Generates test and coverage reports.  
+7. Uploads the reports as workflow artifacts.
 
-1. Descarga el código del repositorio.
+This pipeline ensures that both the model and the API work correctly before allowing any deployment. If the tests fail, the CD pipeline should not run.
 
-2. Configura Python 3.11.
+---
 
-3. Instala las dependencias del proyecto (.[dev]).
+##  Continuous Deployment (cd.yml)
 
-4. Ejecuta los tests del modelo.
+This file defines the Continuous Deployment pipeline.  
+Its goal is to automatically deploy the application to AWS once the code has passed all validations.
 
-5. Ejecuta los tests de la API.
+### When does it run?
 
-6. Genera un reporte de tests y cobertura.
+- Automatically when the CI workflow finishes successfully.  
+- Only if the commit comes from the `develop` branch.  
+- It can also be triggered manually (`workflow_dispatch`).
 
-7. Sube los reportes como artefactos del workflow.
+### What does it do?
 
-Este pipeline asegura que el modelo y la API funcionan correctamente antes de permitir despliegues. Si los tests fallan, el CD no debería ejecutarse.
+1. Checks out the repository code.  
+2. Authenticates with AWS using OIDC.  
+3. Installs the project dependencies.  
+4. Packages the API code into a `lambda.zip` file.  
+5. Updates the AWS Lambda function code.  
+6. Publishes a new Lambda version (restarts the service).
 
-### 4.1 Continuous Deployment (cd.yml)
+This pipeline takes the code validated by CI and automatically deploys it as an API on AWS Lambda.
 
-Este archivo define el pipeline de Despliegue Continuo.
-Su objetivo es desplegar automáticamente la aplicación en AWS cuando el código ya pasó las validaciones.
-
-### ¿Cuándo se ejecuta?
-
-- Automáticamente cuando termina el workflow de CI y fue exitoso.
-
-- Solo si el commit viene de la rama develop.
-
-- También se puede ejecutar manualmente (workflow_dispatch).
-
-### ¿Qué hace?
-
-1. Descarga el código del repositorio.
-
-2. Se autentica en AWS usando OIDC .
-
-3. Instala las dependencias del proyecto.
-
-4. Empaqueta el código de la API en un archivo lambda.zip.
-
-5. Actualiza el código de la función AWS Lambda.
-
-6. Publica una nueva versión de la Lambda (reinicia el servicio).
-
-Este pipeline se encarga de tomar el código validado por CI y desplegarlo automáticamente como una API en AWS Lambda.
 
 
 
