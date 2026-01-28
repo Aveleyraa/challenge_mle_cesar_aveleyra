@@ -1,0 +1,90 @@
+name: Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'develop'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Upgrade pip
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+      
+      # Install project using pyproject.toml
+      - name: Install project dependencies
+        run: |
+          pip install .[dev]
+      
+      # ============================================
+      # AWS AUTHENTICATION
+      # ============================================
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      # ============================================
+      # AWS SAM
+      # ============================================
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
+      
+      - name: Build SAM application
+        run: |
+          sam build
+      
+      - name: Deploy to AWS Lambda
+        run: |
+          sam deploy \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+      
+      # ============================================
+      # POST-DEPLOY VERIFICATION
+      # ============================================
+      - name: Wait for deployment
+        run: sleep 30
+      
+      - name: Health check
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.AWS_API_URL }}/health)
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "✅ Deployment successful! API is healthy."
+          else
+            echo "❌ Deployment failed! Health check returned $RESPONSE"
+            exit 1
+          fi
+      
+      - name: Smoke test
+        run: |
+          RESPONSE=$(curl -s -X POST "${{ secrets.AWS_API_URL }}/predict" \
+            -H "Content-Type: application/json" \
+            -d '{"flights":[{"OPERA":"Grupo LATAM","TIPOVUELO":"N","MES":3}]}')
+          echo "Response: $RESPONSE"
+          if echo "$RESPONSE" | grep -qi "predict"; then
+            echo "✅ Smoke test passed!"
+          else
+            echo "❌ Smoke test failed"
+            exit 1
+          fi
