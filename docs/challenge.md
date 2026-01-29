@@ -481,8 +481,22 @@ Its goal is to automatically deploy the application to AWS once the code has pas
 
 This pipeline takes the code validated by CI and automatically deploys it as an API on AWS Lambda.
 
+# Next Steps & Recommendations
 
 
+To improve and evolve this solution the following steps are recommended:
+
+1. **Monitoring & Observability**  
+   Implement monitoring for the API and model performance using tools like CloudWatch o GCO to track latency, errors, and traffic.
+
+2. **Model Versioning & Registry**  
+   Use a model registry ( SageMaker Model Registry or MLflow or VertexAI) to track different model versions, metadata.
+
+3. **Automated Retraining**  
+   Set up a retraining pipeline triggered by new data or performance degradation, using scheduled workflows.
+
+4. **Data Drift & Model Drift Detection**  
+   Monitor data distributions and prediction quality to detect drift and decide when retraining is needed.
 
 
 
